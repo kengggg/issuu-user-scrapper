@@ -108,12 +108,26 @@ def scrap_document_links(profile_url, save_folder):
 
     time.sleep(5)
 
-    allow_all_cookies_button = WebDriverWait(driver, 10).until(
-        EC.element_to_be_clickable((By.ID, 'CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll'))
-    )
-    if allow_all_cookies_button:
+    # Try to handle cookie consent if it appears
+    try:
+        allow_all_cookies_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, 'CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll'))
+        )
         allow_all_cookies_button.click()
         time.sleep(2)
+        print("Cookie consent accepted")
+    except:
+        # Try alternative cookie button selectors
+        try:
+            # Try to find and click any "Allow all" or "Accept all" button
+            cookie_buttons = driver.find_elements(By.XPATH, "//*[contains(text(), 'Allow') or contains(text(), 'Accept')]")
+            if cookie_buttons:
+                cookie_buttons[0].click()
+                time.sleep(2)
+                print("Cookie consent accepted (alternative method)")
+        except:
+            pass
+        print("Continuing without cookie consent...")
 
     publication_links = []
 
@@ -134,8 +148,12 @@ def scrap_document_links(profile_url, save_folder):
         next_button = driver.find_elements(By.XPATH, f'//a[contains(@aria-label, "Page {page_number + 1}")]')
 
         if next_button:
-            # move to next page
-            next_button[0].click()
+            # move to next page - use JavaScript click to avoid interception
+            try:
+                driver.execute_script("arguments[0].click();", next_button[0])
+            except:
+                # Fallback to regular click
+                next_button[0].click()
             page_number += 1
             time.sleep(5)
         else:
