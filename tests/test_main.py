@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import pytest
 
@@ -103,54 +103,130 @@ def test_chunked_yields_even_and_final_chunks():
     assert chunks == [[0, 1, 2], [3, 4, 5], [6]]
 
 
-class _Result:
-    def get(self):
-        return None
-
-
 class _Pool:
+    instances: list["_Pool"] = []
+
     def __init__(self, processes: int):
         self.processes = processes
+        self.apply_async_calls: list[tuple] = []
 
     def __enter__(self):
+        type(self).instances.append(self)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         return False
 
     def apply_async(self, func, args):
-        func(*args)
-        return _Result()
+        self.apply_async_calls.append((func, args))
+        return _AsyncResult(func, args)
+
+
+class _AsyncResult:
+    event_recorder: Callable[[str, str], None] | None = None
+
+    def __init__(self, func, args):
+        self._func = func
+        self._args = args
+        self.get_calls = 0
+
+    def get(self):
+        self.get_calls += 1
+        recorder = getattr(type(self), "event_recorder", None)
+        if recorder:
+            recorder("get", self._args[0])
+        return self._func(*self._args)
 
 
 class _Tqdm:
+    instances: list["_Tqdm"] = []
+    event_recorder: Callable[[str, str | int], None] | None = None
+    link_supplier: Callable[[], str | int] | None = None
+
     def __init__(self, *args, **kwargs):
         self.total = kwargs.get("total")
         self.desc = kwargs.get("desc")
         self.updated = 0
+        self.update_calls: list[int] = []
 
     def __enter__(self):
+        type(self).instances.append(self)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         return False
 
     def update(self, amount: int):
+        self.update_calls.append(amount)
         self.updated += amount
+        recorder = getattr(type(self), "event_recorder", None)
+        if recorder:
+            link_supplier = getattr(type(self), "link_supplier", None)
+            link = link_supplier() if link_supplier else amount
+            recorder("update", link)
 
 
-def test_download_issuu_pdfs_deduplicates_and_tracks_progress(monkeypatch):
-    calls: list[tuple[str, str]] = []
+def test_download_issuu_pdfs_processes_unique_chunks_and_updates_progress(monkeypatch):
+    event_log: list[tuple[str, str]] = []
+    download_calls: list[tuple[str, str]] = []
+    recorded_chunks: list[list[str]] = []
+
+    _Pool.instances.clear()
+    _Tqdm.instances.clear()
+
+    monkeypatch.setattr(_AsyncResult, "event_recorder", lambda event, link: event_log.append((event, link)))
+    monkeypatch.setattr(_Tqdm, "event_recorder", lambda event, link: event_log.append((event, link)))
 
     monkeypatch.setattr(main.multiprocessing, "Pool", _Pool)
-    monkeypatch.setattr(main.multiprocessing, "cpu_count", lambda: 4)
-    monkeypatch.setattr(main, "download_link_pdf", lambda link, folder: calls.append((link, folder)))
+    monkeypatch.setattr(main.multiprocessing, "cpu_count", lambda: 3)
+
+    def fake_download(link: str, folder: str) -> None:
+        download_calls.append((link, folder))
+        event_log.append(("download", link))
+
+    monkeypatch.setattr(main, "download_link_pdf", fake_download)
     monkeypatch.setattr(main, "tqdm", lambda *args, **kwargs: _Tqdm(*args, **kwargs))
 
-    links = ["a", "b", "a", "c"]
+    def latest_downloaded_link() -> str:
+        assert download_calls, "Progress updated before any downloads completed"
+        return download_calls[-1][0]
+
+    monkeypatch.setattr(_Tqdm, "link_supplier", latest_downloaded_link)
+
+    original_chunked = main._chunked
+
+    def recording_chunked(iterable, chunk_size):
+        for chunk in original_chunked(iterable, chunk_size):
+            recorded_chunks.append(chunk.copy())
+            yield chunk
+
+    monkeypatch.setattr(main, "_chunked", recording_chunked)
+
+    links = ["a", "b", "a", "c", "d", "e", "d"]
     main.download_issuu_pdfs(links, "folder")
 
-    assert calls == [("a", "folder"), ("b", "folder"), ("c", "folder")]
+    unique_links = ["a", "b", "c", "d", "e"]
+    assert download_calls == [(link, "folder") for link in unique_links]
+
+    pool_instance = _Pool.instances[0]
+    assert pool_instance.processes == 3
+    assert pool_instance.apply_async_calls == [
+        (main.download_link_pdf, (link, "folder")) for link in unique_links
+    ]
+
+    assert recorded_chunks == [["a", "b", "c"], ["d", "e"]]
+
+    tqdm_instance = _Tqdm.instances[0]
+    assert tqdm_instance.total == len(unique_links)
+    assert tqdm_instance.desc == "Downloading PDFs"
+    assert tqdm_instance.update_calls == [1, 1, 1, 1, 1]
+    assert tqdm_instance.updated == len(unique_links)
+
+    expected_sequence = []
+    for link in unique_links:
+        expected_sequence.extend([("get", link), ("download", link), ("update", link)])
+
+    assert event_log == expected_sequence
 
 
 # Tests for _build_chrome_options
