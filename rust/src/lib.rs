@@ -186,11 +186,15 @@ pub async fn scrap_document_links(profile_url: &str, save_folder: &str) -> Resul
 }
 
 async fn scrap_document_links_impl(driver: &WebDriver, profile_url: &str) -> Result<Vec<String>> {
-    driver.goto(profile_url).await?;
+    println!("Navigating to: {}", profile_url);
+    driver.goto(profile_url).await
+        .context("Failed to navigate to profile URL")?;
 
+    println!("Waiting for page to load...");
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     // Handle cookie consent
+    println!("Checking for cookie consent dialog...");
     match driver
         .query(By::Id("CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll"))
         .wait(Duration::from_secs(10), Duration::from_millis(500))
@@ -198,11 +202,14 @@ async fn scrap_document_links_impl(driver: &WebDriver, profile_url: &str) -> Res
         .await
     {
         Ok(button) => {
-            button.click().await?;
+            println!("Found cookie consent button, clicking...");
+            button.click().await
+                .context("Failed to click cookie consent button")?;
             tokio::time::sleep(Duration::from_secs(2)).await;
-            println!("Cookie consent accepted");
+            println!("✅ Cookie consent accepted");
         }
         Err(_) => {
+            println!("Primary cookie button not found, trying alternatives...");
             // Try alternative cookie buttons
             match driver
                 .find_all(By::XPath(
@@ -211,12 +218,29 @@ async fn scrap_document_links_impl(driver: &WebDriver, profile_url: &str) -> Res
                 .await
             {
                 Ok(buttons) if !buttons.is_empty() => {
-                    buttons[0].click().await?;
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    println!("Cookie consent accepted (alternative method)");
+                    println!("Found {} alternative cookie buttons", buttons.len());
+                    // Try each button until one works
+                    let mut clicked = false;
+                    for (i, button) in buttons.iter().enumerate() {
+                        match button.click().await {
+                            Ok(_) => {
+                                println!("✅ Cookie consent accepted via button #{}", i + 1);
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                clicked = true;
+                                break;
+                            }
+                            Err(_) => {
+                                // Try next button
+                                continue;
+                            }
+                        }
+                    }
+                    if !clicked {
+                        println!("⚠️  None of the cookie buttons were clickable, continuing anyway");
+                    }
                 }
                 _ => {
-                    println!("Continuing without cookie consent...");
+                    println!("⚠️  No cookie buttons found, continuing without cookie consent");
                 }
             }
         }
@@ -232,9 +256,13 @@ async fn scrap_document_links_impl(driver: &WebDriver, profile_url: &str) -> Res
         println!("=========================================================================");
         println!("Scraping page number: {}", page_number);
 
+        // Wait for publication cards to load
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
         let cards = driver
             .find_all(By::Css("a[class*='PublicationCard__publication-card__card-link']"))
-            .await?;
+            .await
+            .context("Failed to find publication cards on page")?;
 
         for card in cards {
             if let Some(href) = card.attr("href").await? {
@@ -256,13 +284,13 @@ async fn scrap_document_links_impl(driver: &WebDriver, profile_url: &str) -> Res
             .await?;
 
         if !next_buttons.is_empty() {
-            // Click using JavaScript to avoid interception
-            driver
-                .execute(&format!(
-                    "arguments[0].click();",
-                ), vec![next_buttons[0].to_json()?])
-                .await?;
+            // Click next page button
+            next_buttons[0]
+                .click()
+                .await
+                .context("Failed to click next page button")?;
 
+            println!("Clicked to page {}", page_number + 1);
             page_number += 1;
             tokio::time::sleep(Duration::from_secs(5)).await;
         } else {
