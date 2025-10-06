@@ -2,3 +2,6 @@ bin
 include
 lib
 pyvenv.cfg
+
+__pycache__
+.pytest_cache
