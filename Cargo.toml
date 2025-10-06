@@ -1,0 +1,27 @@
+[package]
+name = "issuu_scraper"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# HTTP client with retry support
+reqwest = { version = "0.11", features = ["blocking", "stream"] }
+# Selenium WebDriver for Rust
+thirtyfour = "0.31"
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+# Progress bars
+indicatif = "0.17"
+# Error handling
+anyhow = "1.0"
+# Parallel processing
+rayon = "1.8"
+# CPU count detection
+num_cpus = "1.16"
+# Command line argument parsing
+clap = { version = "4.4", features = ["derive"] }
+
+[dev-dependencies]
+# Testing utilities
+mockito = "1.2"
+tempfile = "3.8"

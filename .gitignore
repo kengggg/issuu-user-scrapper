@@ -1,7 +1,31 @@
+# Python virtual environment
 bin
 include
 lib
 pyvenv.cfg
 
+# Python
 __pycache__
 .pytest_cache
+*.pyc
+*.pyo
+*.egg-info
+.coverage
+htmlcov/
+
+# Rust
+/target
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
