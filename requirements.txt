@@ -1,4 +1,6 @@
 selenium
 requests
-tqdm    
+urllib3
+tqdm
 webdriver_manager
+pytest
