@@ -109,33 +109,43 @@ class _Result:
 
 
 class _Pool:
+    instances: list["_Pool"] = []
+
     def __init__(self, processes: int):
         self.processes = processes
+        self.apply_async_calls: list[tuple] = []
 
     def __enter__(self):
+        type(self).instances.append(self)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         return False
 
     def apply_async(self, func, args):
+        self.apply_async_calls.append((func, args))
         func(*args)
         return _Result()
 
 
 class _Tqdm:
+    instances: list["_Tqdm"] = []
+
     def __init__(self, *args, **kwargs):
         self.total = kwargs.get("total")
         self.desc = kwargs.get("desc")
         self.updated = 0
+        self.update_calls: list[int] = []
 
     def __enter__(self):
+        type(self).instances.append(self)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         return False
 
     def update(self, amount: int):
+        self.update_calls.append(amount)
         self.updated += amount
 
 
@@ -151,6 +161,13 @@ def test_download_issuu_pdfs_deduplicates_and_tracks_progress(monkeypatch):
     main.download_issuu_pdfs(links, "folder")
 
     assert calls == [("a", "folder"), ("b", "folder"), ("c", "folder")]
+    assert _Pool.instances[0].processes == 4
+    assert len(_Pool.instances[0].apply_async_calls) == len({"a", "b", "c"})
+    tqdm_instance = _Tqdm.instances[0]
+    assert tqdm_instance.total == 3
+    assert tqdm_instance.desc == "Downloading PDFs"
+    assert tqdm_instance.update_calls == [1, 1, 1]
+    assert tqdm_instance.updated == 3
 
 
 # Tests for _build_chrome_options
